@@ -1,0 +1,90 @@
+﻿<UserControl x:Class="DeepNestPort.Core.RibbonMenuWpf"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:DeepNestPort.Core"
+             mc:Ignorable="d" 
+             d:DesignHeight="450" d:DesignWidth="800">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition/>
+        </Grid.RowDefinitions>
+        <Ribbon x:Name="RibbonWin" SelectedIndex="0">
+            <Ribbon.HelpPaneContent>
+                <RibbonButton x:Name="HelpButton" />
+            </Ribbon.HelpPaneContent>
+            <Ribbon.ApplicationMenu>
+                <RibbonApplicationMenu Visibility="Collapsed">
+
+                </RibbonApplicationMenu>
+            </Ribbon.ApplicationMenu>
+            <Ribbon.QuickAccessToolBar>
+                <RibbonQuickAccessToolBar Visibility="Collapsed">
+
+                </RibbonQuickAccessToolBar>
+            </Ribbon.QuickAccessToolBar>
+            <RibbonTab x:Name="projectTab" Header="General" KeyTip="H" >
+                <!-- Home  group-->
+                <RibbonGroup x:Name="Project" Header="Project">
+                    <RibbonButton  Label="Save" Click="Save"  LargeImageSource="Icons/disk.png"  />
+                    <RibbonButton  Label="Load" Click="Load" LargeImageSource="Icons/folder-horizontal-open.png"  />
+
+                </RibbonGroup>
+                <RibbonGroup x:Name="General" Header="General">
+                    <!--<RibbonButton  Label="Clear"  KeyTip="F" />-->
+
+                    <RibbonButton  Label="Load parts" Click="RibbonButton_Click" LargeImageSource="Icons/plus.png"  />
+
+                    <RibbonButton  Label="Run nesting"  Click="Run_Click" LargeImageSource="Icons/control-double.png"  />
+                    <RibbonButton  Label="Settings"  Click="RibbonButton_Click_8" LargeImageSource="Icons/gear.png"  />
+
+
+
+                    <!--<RibbonMenuButton  Label="Employee" KeyTip="V">
+                        <RibbonMenuItem  Header="Keep Text Only" KeyTip="T"/>
+                        <RibbonMenuItem Header="Paste Special..." KeyTip="S"/>
+                    </RibbonMenuButton>
+                    <RibbonButton  Label="Save" KeyTip="X" />
+                    <RibbonButton  Label="Add" KeyTip="C" />-->
+                </RibbonGroup>
+
+            </RibbonTab>
+            <RibbonTab x:Name="nestTab" Header="Nesting" KeyTip="H" >
+                <!-- Home  group-->
+                <RibbonGroup x:Name="nest" Header="General">
+                    <RibbonButton  Label="Stop" Click="RibbonButton_Click_1"  SmallImageSource="Icons/cross-button.png"  KeyTip="S" />
+                    <RibbonButton  Label="Nests" Click="RibbonButton_Click_9"  KeyTip="E" />
+
+                </RibbonGroup>
+                <RibbonGroup x:Name="export" Header="Export">
+                    <!--<RibbonButton  Label="Stop" Click="RibbonButton_Click_1"  KeyTip="F" />-->
+
+                    <RibbonButton  Label="Export"  Click="RibbonButton_Click_2" SmallImageSource="Icons/disk.png"  KeyTip="F" />
+                    <RibbonButton  Label="Export All"  Click="RibbonButton_Click_7" SmallImageSource="Icons/disks.png"  KeyTip="F" />
+                    <RibbonButton  Label="Report"  Click="RibbonButton_Click_10" SmallImageSource="Icons/report.png"  KeyTip="F" />
+                    
+
+
+                </RibbonGroup>
+                <RibbonGroup x:Name="view" Header="View">
+                    <!--<RibbonButton  Label="Stop" Click="RibbonButton_Click_1"  KeyTip="F" />-->
+                    <RibbonButton  Label="Fit all"  Click="RibbonButton_Click_5" SmallImageSource="Icons/magnifier.png"  KeyTip="F" />
+
+                    <RibbonButton  Label="Zoom in" Click="RibbonButton_Click_3"   SmallImageSource="Icons/magnifier--plus.png"  />
+                    <RibbonButton  Label="Zoom out"  Click="RibbonButton_Click_4"  SmallImageSource="Icons/magnifier--minus.png"  />
+
+                    <RibbonToggleButton x:Name="colorsToggle" Label="Colors" Unchecked="colorsToggle_Unchecked"  Checked="RibbonToggleButton_Checked"  SmallImageSource="Icons/color.png"  />
+
+                </RibbonGroup>
+                <RibbonGroup x:Name="navigate" Header="Navigate">
+
+                    
+                    <RibbonButton  Label="Next sheet" Click="RibbonButton_Click_6"   SmallImageSource="Icons\arrow.png" />
+                    <RibbonToggleButton x:Name="borderScroll" Label="Border scroll" Unchecked="borderScroll_Unchecked"  Checked="borderScroll_Checked"    />
+                </RibbonGroup>
+            </RibbonTab>          
+        </Ribbon>
+    </Grid>
+</UserControl>
