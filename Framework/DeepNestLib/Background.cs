@@ -1672,7 +1672,8 @@ namespace DeepNestLib
                 initial.Remaining.Add(rotated);
             }
             initial.RemainingArea = initial.Remaining.Sum(p => Math.Abs(GeometryUtil.polygonArea(p)));
-            int beamWidth = Math.Max(1, config.PlaceParts1BeamWidth);
+            int generationSteps = Math.Max(1, config.PlacePartsGenerationSteps);
+            int generationStep = 0;
             var beam = new List<CombinedBeamState> { initial };
             var finished = new List<CombinedBeamState>();
             foreach (var originalSheet in sheets)
@@ -1721,7 +1722,10 @@ namespace DeepNestLib
                         if (greedy != null) expanded.Add(branch.Extend(part, greedy));
                         if (legacy == null && greedy == null) expanded.Add(branch);
                     }
-                    beam = SelectCombinedBeam(expanded, beamWidth);
+                    generationStep++;
+                    beam = SelectCombinedBeam(expanded,
+                        generationStep >= generationSteps ? 1 : int.MaxValue);
+                    if (generationStep >= generationSteps) generationStep = 0;
                 }
                 foreach (var branch in beam)
                 {
@@ -2640,7 +2644,7 @@ namespace DeepNestLib
             }
             //console.log('nfp cached:', c);
             Stopwatch sw = Stopwatch.StartNew();
-
+            //var placement = placeParts(data.sheets.ToArray(), parts, data.config, index);
             var placement = placePartsCombined(data.sheets.ToArray(), parts, data.config, index);
             sw.Stop();
             LastPlacePartTime = sw.ElapsedMilliseconds;

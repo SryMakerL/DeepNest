@@ -37,7 +37,9 @@
         /// </summary>
         public int LatticeMaxIterations { get; set; } = 150;
 
-        public int PlaceParts1BeamWidth { get; set; } = 8;
-        public int PlaceParts1LookaheadParts { get; set; } = 4;
+        /// <summary>
+        /// 轮次放置最大迭代次数
+        /// </summary>
+        public int PlacePartsGenerationSteps { get; set; } = 4;
     }
 }
