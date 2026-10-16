@@ -2066,384 +2066,287 @@ namespace DeepNestLib
 
         /// <summary>
         /// 混合启发式放置：placeParts2
-        /// 说明：在选择每个零件的放置位置时同时评估整体紧密度（包络/凸包面积）和局部紧密度（空洞面积与接触近似），
-        /// 使用多目标加权得到一个统一目标用于比较候选位置，从而避免过早陷入局部最优，通常能得到更高质量布局。
-        /// 与 placeParts1 相同的参数接口，返回 SheetPlacement。
         /// </summary>
         public static SheetPlacement placeParts2(NFP[] sheets, NFP[] parts, SvgNestConfig config, int nestindex)
         {
-            if (sheets == null || sheets.Count() == 0) return null;
-
-            // 权重，可按需调整或暴露到 config
-            double wCompact = 1.0; // 包络紧密度权重（全局）
-            double wHole = 2.0;    // 空洞面积权重（局部）
-            double wContact = -0.5; // 接触长度奖励（负号表示接触越多目标越小）
-
-            int i, j, k, m, n;
-            double totalsheetarea = 0;
-
-            NFP part = null;
-            double totalMerged = 0;
-
-            // rotate paths by given rotation (use cache)
-            var rotated = new List<NFP>();
-            for (i = 0; i < parts.Length; i++)
+            parts = parts ?? new NFP[0];
+            sheets = sheets ?? new NFP[0];
+            var clock = Stopwatch.StartNew();
+            int starts = Math.Max(1, Math.Min(32, config.PlaceParts2Starts));
+            int beamWidth = Math.Max(1, Math.Min(32, config.PlaceParts2BeamWidth));
+            int lookahead = Math.Max(1, Math.Min(8, config.PlaceParts2Lookahead));
+            int candidateCount = Math.Max(1, Math.Min(32, config.PlaceParts2Candidates));
+            var random = new Random(config.PlaceParts2Seed);
+            var weights = parts.Select(p => Math.Max(1e-9, Math.Abs(GeometryUtil.polygonArea(p)))).ToArray();
+            var rotated = new Dictionary<int, NFP[]>();
+            SheetPlacement best = null;
+            for (int start = 0; start < starts; start++)
             {
-                var r = rotatePolygon(parts[i], parts[i].rotation);
-                rotated.Add(r);
-            }
-
-            parts = rotated.ToArray();
-
-            List<SheetPlacementItem> allplacements = new List<SheetPlacementItem>();
-
-            double fitness1 = 0;
-
-            string key;
-            NFP nfp;
-            NFP nfp1;
-            double sheetarea = -1;
-            int totalPlaced = 0;
-            int totalParts = parts.Count();
-
-            while (parts.Length > 0)
-            {
-                List<NFP> placed = new List<NFP>();
-                List<PlacementItem> placements = new List<PlacementItem>();
-
-                // open a new sheet
-                var sheet = sheets.First();
-                sheets = sheets.Skip(1).ToArray();
-                sheetarea = Math.Abs(GeometryUtil.polygonArea(sheet));
-                totalsheetarea += sheetarea;
-
-                fitness1 += sheetarea; // 每打开一张新板，加权
-
-                string clipkey = "";
-                Dictionary<string, ClipCacheItem> clipCache = new Dictionary<string, ClipCacheItem>();
-                var clipper = new ClipperLib.Clipper();
-                var combinedNfp = new List<List<ClipperLib.IntPoint>>();
-                var error = false;
-                IntPoint[][] clipperSheetNfp = null;
-                double? minwidth = null;
-                PlacementItem position = null;
-                double? minarea = null;
-
-                for (i = 0; i < parts.Length; i++)
+                if (start > 0 && clock.ElapsedMilliseconds >= Math.Max(0, config.PlaceParts2TimeLimitMs)) break;
+                if (start > 0)
+                    for (int i = 0; i < weights.Length; i++) weights[i] *= 0.8 + random.NextDouble() * 0.4;
+                double weightSum = weights.Sum();
+                if (weightSum > 0)
+                    for (int i = 0; i < weights.Length; i++) weights[i] /= weightSum;
+                var remaining = start == 0 ? Enumerable.Range(0, parts.Length).ToList()
+                    : Enumerable.Range(0, parts.Length).OrderByDescending(i => weights[i]).ThenBy(i => i).ToList();
+                var allplacements = new List<SheetPlacementItem>();
+                double totalsheetarea = 0;
+                double sheetarea = 0;
+                double fitness = 0;
+                double lastArea = 0;
+                foreach (var inputSheet in sheets)
                 {
-                    float prog = 0.66f + 0.34f * (totalPlaced / (float)totalParts);
-                    DisplayProgress(prog);
-
-                    part = parts[i];
-                    NFP[] sheetNfp = null;
-                    for (j = 0; j < (360f / config.rotations); j++)
+                    if (remaining.Count == 0) break;
+                    var sheet = ClonePlaceParts2Polygon(inputSheet);
+                    sheet.id = inputSheet.id;
+                    sheet.source = inputSheet.source;
+                    sheet.rotation = inputSheet.rotation;
+                    sheetarea = Math.Abs(GeometryUtil.polygonArea(sheet));
+                    int sheetPartCount = remaining.Count;
+                    var innerNfps = new Dictionary<NFP, NFP[]>();
+                    var current = new PlaceParts2State
                     {
-                        sheetNfp = getInnerNfp(sheet, part, 0, config);
-                        if (sheetNfp != null && sheetNfp.Count() > 0)
-                        {
-                            if (sheetNfp[0].length == 0)
-                            {
-                                throw new ArgumentException();
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-
-                        var r = rotatePolygon(part, 360f / config.rotations);
-                        r.rotation = part.rotation + (360f / config.rotations);
-                        r.source = part.source;
-                        r.id = part.id;
-
-                        part = r;
-                        parts[i] = r;
-
-                        if (part.rotation > 360f)
-                        {
-                            part.rotation = part.rotation % 360f;
-                        }
-                    }
-                    if (sheetNfp == null || sheetNfp.Count() == 0) continue;
-
-                    position = null;
-
-                    if (placed.Count == 0)
+                        Geometry = new PlaceParts1BeamState(),
+                        Pending = remaining.ToList()
+                    };
+                    while (current.Pending.Count > 0)
                     {
-                        // first part: use BL
-                        for (j = 0; j < sheetNfp.Count(); j++)
+                        bool greedy = clock.ElapsedMilliseconds >= Math.Max(0, config.PlaceParts2TimeLimitMs);
+                        var beam = new List<PlaceParts2State> { current };
+                        for (int depth = 0; depth < (greedy ? 1 : lookahead); depth++)
                         {
-                            for (k = 0; k < sheetNfp[j].length; k++)
+                            var expanded = new List<PlaceParts2State>();
+                            foreach (var state in beam)
                             {
-                                if (position == null || ((sheetNfp[j][k].x - part[0].x) < position.x) || (GeometryUtil._almostEqual(sheetNfp[j][k].x - part[0].x, position.x) && ((sheetNfp[j][k].y - part[0].y) < position.y)))
+                                if (state.Pending.Count == 0) { expanded.Add(state); continue; }
+                                var skipped = new PlaceParts2State
                                 {
-                                    position = new PlacementItem()
+                                    Geometry = state.Geometry,
+                                    Pending = state.Pending.Skip(1).ToList(),
+                                    Taken = state.Taken.ToList(),
+                                    Area = state.Area
+                                };
+                                expanded.Add(skipped);
+                                foreach (int partIndex in state.Pending.Take(greedy ? 1 : lookahead))
+                                {
+                                    NFP[] variants;
+                                    if (!rotated.TryGetValue(partIndex, out variants))
                                     {
-                                        x = sheetNfp[j][k].x - part[0].x,
-                                        y = sheetNfp[j][k].y - part[0].y,
-                                        id = part.id,
-                                        rotation = part.rotation,
-                                        source = part.source.Value
-                                    };
+                                        int rotations = Math.Max(1, config.rotations);
+                                        variants = new NFP[rotations];
+                                        for (int angle = 0; angle < rotations; angle++)
+                                        {
+                                            float rotation = (parts[partIndex].rotation + angle * (360f / rotations)) % 360f;
+                                            var variant = rotatePolygon(parts[partIndex], rotation);
+                                            variant.id = parts[partIndex].id;
+                                            variant.source = parts[partIndex].source;
+                                            variant.rotation = rotation;
+                                            variants[angle] = variant;
+                                        }
+                                        rotated.Add(partIndex, variants);
+                                    }
+                                    foreach (var variant in variants)
+                                    {
+                                        greedy = greedy || clock.ElapsedMilliseconds >= Math.Max(0, config.PlaceParts2TimeLimitMs);
+                                        NFP[] inner;
+                                        if (!innerNfps.TryGetValue(variant, out inner))
+                                        {
+                                            var bounds = GeometryUtil.getPolygonBounds(variant);
+                                            inner = variant.length == 0 || bounds.width > sheet.WidthCalculated + 1e-7
+                                                || bounds.height > sheet.HeightCalculated + 1e-7
+                                                ? null : getInnerNfp(sheet, variant, 0, config);
+                                            innerNfps.Add(variant, inner);
+                                        }
+                                        var candidates = GetPlaceParts2Candidates(inner, sheet, variant, state.Geometry, config,
+                                            greedy ? 1 : candidateCount);
+                                        foreach (var candidate in candidates)
+                                        {
+                                            var next = new PlaceParts2State
+                                            {
+                                                Geometry = state.Geometry.Extend(variant, candidate.Placement, 0, 0),
+                                                Pending = state.Pending.Where(i => i != partIndex).ToList(),
+                                                Taken = state.Taken.Concat(new[] { partIndex }).ToList(),
+                                                Area = state.Area + Math.Abs(GeometryUtil.polygonArea(variant))
+                                            };
+                                            expanded.Add(next);
+                                        }
+                                    }
+                                    if (!greedy && clock.ElapsedMilliseconds >= Math.Max(0, config.PlaceParts2TimeLimitMs)) break;
                                 }
                             }
+                            beam = SelectPlaceParts2Beam(expanded, greedy ? 1 : beamWidth);
+                            if (beam.All(s => s.Pending.Count == 0)
+                                || clock.ElapsedMilliseconds >= Math.Max(0, config.PlaceParts2TimeLimitMs)) break;
                         }
-
-                        if (position == null) throw new Exception("position null");
-                        placements.Add(position);
-                        placed.Add(part);
-                        totalPlaced++;
-                        continue;
+                        current = beam[0];
                     }
-
-                    clipperSheetNfp = innerNfpToClipperCoordinates(sheetNfp, config);
-
-                    clipper = new ClipperLib.Clipper();
-                    combinedNfp = new List<List<ClipperLib.IntPoint>>();
-
-                    error = false;
-
-                    clipkey = "s:" + part.source + "r:" + part.rotation;
-                    var startindex = 0;
-                    if (EnableCaches && clipCache.ContainsKey(clipkey))
+                    remaining.RemoveAll(i => current.Taken.Contains(i));
+                    var placed = current.Geometry;
+                    if (placed.Placed.Count > 0 && current.Area > 0)
                     {
-                        var prevNfp = clipCache[clipkey].nfpp;
-                        clipper.AddPaths(prevNfp.Select(z => z.ToList()).ToList(), ClipperLib.PolyType.ptSubject, true);
-                        startindex = clipCache[clipkey].index;
+                        fitness += placed.Width * sheet.HeightCalculated / current.Area * 100;
+                        if (placed.Placed.Count == sheetPartCount) lastArea = placed.Width * sheet.HeightCalculated;
                     }
-
-                    for (j = startindex; j < placed.Count; j++)
+                    if (placed.Placements.Count == 0) continue;
+                    totalsheetarea += sheetarea;
+                    fitness += sheetarea;
+                    allplacements.Add(new SheetPlacementItem
                     {
-                        nfp = getOuterNfp(placed[j], part, 0);
-                        if (nfp == null) { error = true; break; }
-                        for (m = 0; m < nfp.length; m++) { nfp[m].x += placements[j].x; nfp[m].y += placements[j].y; }
-                        if (nfp.children != null && nfp.children.Count > 0)
-                        {
-                            for (n = 0; n < nfp.children.Count; n++)
-                                for (var o = 0; o < nfp.children[n].length; o++) { nfp.children[n][o].x += placements[j].x; nfp.children[n][o].y += placements[j].y; }
-                        }
-
-                        var clipperNfp = nfpToClipperCoordinates(nfp, config.clipperScale);
-                        clipper.AddPaths(clipperNfp.Select(z => z.ToList()).ToList(), ClipperLib.PolyType.ptSubject, true);
-                    }
-
-                    if (error || !clipper.Execute(ClipperLib.ClipType.ctUnion, combinedNfp, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero))
-                    {
-                        continue;
-                    }
-
-                    if (EnableCaches)
-                    {
-                        clipCache[clipkey] = new ClipCacheItem() { index = placed.Count - 1, nfpp = combinedNfp.Select(z => z.ToArray()).ToArray() };
-                    }
-
-                    // difference with sheet polygon
-                    List<List<IntPoint>> _finalNfp = new List<List<IntPoint>>();
-                    clipper = new ClipperLib.Clipper();
-                    clipper.AddPaths(combinedNfp, ClipperLib.PolyType.ptClip, true);
-                    clipper.AddPaths(clipperSheetNfp.Select(z => z.ToList()).ToList(), ClipperLib.PolyType.ptSubject, true);
-
-                    if (!clipper.Execute(ClipperLib.ClipType.ctDifference, _finalNfp, ClipperLib.PolyFillType.pftEvenOdd, ClipperLib.PolyFillType.pftNonZero))
-                    {
-                        continue;
-                    }
-                    if (_finalNfp == null || _finalNfp.Count == 0) continue;
-
-                    List<NFP> f = new List<NFP>();
-                    for (j = 0; j < _finalNfp.Count; j++) f.Add(Background.toNestCoordinates(_finalNfp[j].ToArray(), config.clipperScale));
-                    var finalNfp = f;
-
-                    // 选择候选位置：综合全局包络面积、空洞面积、接触近似
-                    double bestScore = double.MaxValue;
-                    PlacementItem bestPos = null;
-                    double? bestMinWidthCandidate = null;
-
-                    // precompute placed shifted polygons
-                    var placedShifted = new List<NFP>();
-                    for (m = 0; m < placed.Count; m++) placedShifted.Add(shiftPolygon(placed[m], placements[m]));
-
-                    double sumPlacedArea = 0;
-                    for (m = 0; m < placedShifted.Count; m++) sumPlacedArea += Math.Abs(GeometryUtil.polygonArea(placedShifted[m]));
-
-                    for (j = 0; j < finalNfp.Count; j++)
-                    {
-                        var nf = finalNfp[j];
-                        for (k = 0; k < nf.length; k++)
-                        {
-                            var shiftvector = new PlacementItem()
-                            {
-                                id = part.id,
-                                x = nf[k].x - part[0].x,
-                                y = nf[k].y - part[0].y,
-                                source = part.source.Value,
-                                rotation = part.rotation
-                            };
-
-                            // build candidate shifted polygons
-                            var candShifted = shiftPolygon(part, shiftvector);
-                            var allPolys = new List<NFP>(placedShifted.Select(z => clone(z)));
-                            allPolys.Add(candShifted);
-
-                            // compute hull area (global compactness)
-                            NFP allPoints = new NFP();
-                            for (int pi = 0; pi < allPolys.Count; pi++)
-                            {
-                                for (int q = 0; q < allPolys[pi].length; q++) allPoints.AddPoint(new SvgPoint(allPolys[pi][q].x, allPolys[pi][q].y));
-                            }
-                            var hull = getHull(allPoints);
-                            double hullArea = Math.Abs(GeometryUtil.polygonArea(hull));
-
-                            // compute union area and union perimeter via Clipper
-                            double unionArea, unionPerim;
-                            ComputeUnionAreaAndPerimeter(allPolys, config.clipperScale, out unionArea, out unionPerim);
-
-                            double holeArea = Math.Max(0.0, hullArea - unionArea);
-
-                            // approximate contact length: sumPerimeters - unionPerimeter
-                            double sumPerims = 0;
-                            for (int pi = 0; pi < allPolys.Count; pi++) sumPerims += Perimeter(allPolys[pi]);
-                            double contactApprox = Math.Max(0.0, sumPerims - unionPerim);
-
-                            // normalized metrics
-                            double compactness = hullArea / Math.Max(1e-9, unionArea); // closer to 1 is better
-                            double holeRatio = holeArea / Math.Max(1e-9, unionArea);
-                            double contactNorm = contactApprox / Math.Max(1e-9, hullArea + 1.0);
-
-                            double score = wCompact * compactness + wHole * holeRatio + wContact * contactNorm;
-
-                            if (score < bestScore)
-                            {
-                                bestScore = score;
-                                bestPos = shiftvector;
-                                // record a candidate min width (use hull bounding width)
-                                var bnds = GeometryUtil.getPolygonBounds(hull);
-                                bestMinWidthCandidate = bnds.width;
-                            }
-                        }
-                    }
-
-                    if (bestPos != null)
-                    {
-                        placed.Add(part);
-                        totalPlaced++;
-                        placements.Add(bestPos);
-                        if (bestPos.mergedLength != null)
-                        {
-                            totalMerged += bestPos.mergedLength.Value;
-                        }
-                        // update sheet minwidth if we recorded a candidate
-                        if (bestMinWidthCandidate.HasValue)
-                        {
-                            minwidth = bestMinWidthCandidate.Value;
-                        }
-                    }
-
-                    var placednum = placed.Count;
-                    for (j = 0; j < allplacements.Count; j++) placednum += allplacements[j].sheetplacements.Count;
-
+                        sheetId = sheet.id,
+                        sheetSource = sheet.source.Value,
+                        sheetplacements = placed.Placements
+                    });
                 }
-
-                // if minwidth was not set during placement, compute fallback from placed polygons bounding box
-                if (!minwidth.HasValue)
+                foreach (int i in remaining)
                 {
-                    if (placed.Count > 0)
-                    {
-                        NFP allPoints2 = new NFP();
-                        for (int pi = 0; pi < placed.Count; pi++)
-                        {
-                            for (int q = 0; q < placed[pi].length; q++)
-                                allPoints2.AddPoint(new SvgPoint(placed[pi][q].x + placements[pi].x, placed[pi][q].y + placements[pi].y));
-                        }
-                        var hull2 = getHull(allPoints2);
-                        var b2 = GeometryUtil.getPolygonBounds(hull2);
-                        minwidth = b2.width;
-                    }
+                    fitness += 100000000 * Math.Max(1e-9, Math.Abs(GeometryUtil.polygonArea(parts[i]))) / Math.Max(1e-9, totalsheetarea);
+                    weights[i] *= 1.5;
                 }
-
-                if (!minwidth.HasValue)
+                double boostedSum = weights.Sum();
+                if (boostedSum > 0)
+                    for (int i = 0; i < weights.Length; i++) weights[i] /= boostedSum;
+                if (allplacements.Count > 1) fitness += lastArea;
+                if (double.IsNaN(fitness) || double.IsInfinity(fitness)) fitness = double.MaxValue;
+                var result = new SheetPlacement
                 {
-                    fitness1 = double.NaN;
-                }
-                else
-                {
-                    double polyarea = 0;
-                    foreach (var item in placed) polyarea += Math.Abs(GeometryUtil.polygonArea(item));
-                    fitness1 += minwidth.Value * sheet.HeightCalculated / polyarea * 100;
-                }
-
-                for (i = 0; i < placed.Count; i++)
-                {
-                    var index = Array.IndexOf(parts, placed[i]);
-                    if (index >= 0) parts = parts.splice(index, 1);
-                }
-
-                if (placements != null && placements.Count > 0)
-                {
-                    allplacements.Add(new SheetPlacementItem() { sheetId = sheet.id, sheetSource = sheet.source.Value, sheetplacements = placements });
-                }
-                else
-                {
-                    break;
-                }
-
-                if (sheets.Count() == 0) break;
+                    placements = new[] { allplacements },
+                    fitness = fitness,
+                    area = sheetarea,
+                    mergedLength = 0
+                };
+                if (best == null || SheetPlacement.IsBetterThan(result, best)) best = result;
             }
-
-            for (i = 0; i < parts.Count(); i++)
-            {
-                fitness1 += 100000000 * (Math.Abs(GeometryUtil.polygonArea(parts[i])) / totalsheetarea);
-            }
-
-            return new SheetPlacement()
-            {
-                placements = new[] { allplacements.ToList() },
-                fitness = fitness1,
-                area = sheetarea,
-                mergedLength = totalMerged
-            };
-        }
-        // 计算多边形集合的并集面积与并集周长（使用 clipper）
-        private static void ComputeUnionAreaAndPerimeter(List<NFP> polys, double clipperScale, out double unionArea, out double unionPerimeter)
-        {
-            unionArea = 0; unionPerimeter = 0;
-            if (polys == null || polys.Count == 0) return;
-            var clipper = new ClipperLib.Clipper();
-            for (int i = 0; i < polys.Count; i++)
-            {
-                var pts = _Clipper.ScaleUpPaths(polys[i], clipperScale);
-                clipper.AddPath(pts.ToList(), ClipperLib.PolyType.ptSubject, true);
-            }
-            List<List<IntPoint>> solution = new List<List<IntPoint>>();
-            if (!clipper.Execute(ClipperLib.ClipType.ctUnion, solution, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero)) return;
-            double scale = clipperScale;
-            foreach (var path in solution)
-            {
-                if (path == null || path.Count < 3) continue;
-                double areaScaled = Math.Abs(ClipperLib.Clipper.Area(path));
-                unionArea += areaScaled / (scale * scale);
-                // perimeter
-                double per = 0;
-                for (int i = 0, j = path.Count - 1; i < path.Count; j = i++)
-                {
-                    double dx = (path[i].X - path[j].X) / scale;
-                    double dy = (path[i].Y - path[j].Y) / scale;
-                    per += Math.Sqrt(dx * dx + dy * dy);
-                }
-                unionPerimeter += per;
-            }
+            return best;
         }
 
-        private static double Perimeter(NFP p)
+        sealed class PlaceParts2State
         {
-            if (p == null || p.length < 2) return 0;
-            double per = 0;
-            for (int i = 0, j = p.length - 1; i < p.length; j = i++)
+            public PlaceParts1BeamState Geometry;
+            public List<int> Pending;
+            public List<int> Taken = new List<int>();
+            public double Area;
+        }
+
+        static List<PlaceParts2State> SelectPlaceParts2Beam(List<PlaceParts2State> states, int width)
+        {
+            var ordered = states.OrderByDescending(s => s.Geometry.Placed.Count).ThenByDescending(s => s.Area)
+                .ThenBy(s => s.Geometry.Width * s.Geometry.Height).ThenBy(s => s.Geometry.Width)
+                .ThenBy(s => s.Geometry.Height);
+            var result = new List<PlaceParts2State>();
+            var seen = new HashSet<string>();
+            foreach (var state in ordered)
             {
-                double dx = p[i].x - p[j].x;
-                double dy = p[i].y - p[j].y;
-                per += Math.Sqrt(dx * dx + dy * dy);
+                string key = string.Join(";", state.Geometry.Placements.Select(p =>
+                    p.id + ":" + p.rotation.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ":"
+                    + p.x.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + ","
+                    + p.y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)))
+                    + "|" + string.Join(",", state.Pending) + "|" + string.Join(",", state.Taken);
+                if (!seen.Add(key)) continue;
+                result.Add(state);
+                if (result.Count == width) break;
             }
-            return per;
+            return result;
+        }
+
+        static NFP ClonePlaceParts2Polygon(NFP polygon)
+        {
+            var copy = clone(polygon);
+            if (polygon.children != null)
+                copy.children = polygon.children.Select(ClonePlaceParts2Polygon).ToList();
+            return copy;
+        }
+        sealed class PlaceParts2Candidate
+        {
+            public PlacementItem Placement;
+            public double Width;
+            public double Height;
+            public double Score;
+        }
+
+        static List<PlaceParts2Candidate> GetPlaceParts2Candidates(
+            NFP[] sheetNfp,
+            NFP sheet,
+            NFP part,
+            PlaceParts1BeamState state,
+            SvgNestConfig config,
+            int maxCandidates)
+        {
+            var candidates = new List<PlaceParts2Candidate>();
+            if (sheetNfp == null || sheetNfp.Length == 0 || part.length == 0) return candidates;
+            var feasible = sheetNfp;
+            if (state.Placed.Count > 0)
+            {
+                var clipper = new ClipperLib.Clipper();
+                for (int i = 0; i < state.Placed.Count; i++)
+                {
+                    var outerNfp = getOuterNfp(state.Placed[i], part, 0);
+                    if (outerNfp == null) return candidates;
+                    outerNfp = shiftPolygon(ClonePlaceParts2Polygon(outerNfp), state.Placements[i]);
+                    var paths = nfpToClipperCoordinates(outerNfp, config.clipperScale);
+                    clipper.AddPaths(paths.Select(p => p.ToList()).ToList(), ClipperLib.PolyType.ptSubject, true);
+                }
+                var combined = new List<List<IntPoint>>();
+                if (!clipper.Execute(ClipperLib.ClipType.ctUnion, combined, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero))
+                    return candidates;
+                clipper = new ClipperLib.Clipper();
+                clipper.AddPaths(combined, ClipperLib.PolyType.ptClip, true);
+                var inner = innerNfpToClipperCoordinates(sheetNfp, config);
+                clipper.AddPaths(inner.Select(p => p.ToList()).ToList(), ClipperLib.PolyType.ptSubject, true);
+                var difference = new List<List<IntPoint>>();
+                if (!clipper.Execute(ClipperLib.ClipType.ctDifference, difference, ClipperLib.PolyFillType.pftEvenOdd, ClipperLib.PolyFillType.pftNonZero))
+                    return candidates;
+                feasible = difference.Select(p => toNestCoordinates(p.ToArray(), config.clipperScale)).ToArray();
+            }
+
+            var bounds = GeometryUtil.getPolygonBounds(part);
+            var sheetBounds = GeometryUtil.getPolygonBounds(sheet);
+            double sheetWidth = Math.Max(1e-9, sheet.WidthCalculated);
+            var seen = new HashSet<string>();
+            int stride = Math.Max(1, (int)Math.Ceiling(feasible.Sum(p => (double)p.length) / 256));
+            int vertex = 0;
+            foreach (var path in feasible)
+            {
+                for (int i = 0; i < path.length; i++)
+                {
+                    if (vertex++ % stride != 0) continue;
+                    double x = path[i].x - part[0].x;
+                    double y = path[i].y - part[0].y;
+                    string key = Math.Round(x * 10000).ToString() + "," + Math.Round(y * 10000).ToString();
+                    if (!seen.Add(key)) continue;
+                    double minX = bounds.x + x;
+                    double minY = bounds.y + y;
+                    double maxX = minX + bounds.width;
+                    double maxY = minY + bounds.height;
+                    if (minX < sheetBounds.x - 1e-7 || minY < sheetBounds.y - 1e-7
+                        || maxX > sheetBounds.x + sheetBounds.width + 1e-7
+                        || maxY > sheetBounds.y + sheetBounds.height + 1e-7) continue;
+                    if (state.Placed.Count > 0)
+                    {
+                        minX = Math.Min(minX, state.MinX);
+                        minY = Math.Min(minY, state.MinY);
+                        maxX = Math.Max(maxX, state.MaxX);
+                        maxY = Math.Max(maxY, state.MaxY);
+                    }
+                    var placement = new PlacementItem { id = part.id, source = part.source.Value, rotation = part.rotation, x = x, y = y };
+                    double width = maxX - minX;
+                    double score = width / sheetWidth;
+                    candidates.Add(new PlaceParts2Candidate { Placement = placement, Width = width, Height = maxY - minY, Score = score });
+                }
+            }
+            candidates.Sort((left, right) =>
+            {
+                int compare = left.Score.CompareTo(right.Score);
+                if (compare != 0) return compare;
+                compare = left.Width.CompareTo(right.Width);
+                if (compare != 0) return compare;
+                compare = left.Height.CompareTo(right.Height);
+                if (compare != 0) return compare;
+                compare = left.Placement.x.CompareTo(right.Placement.x);
+                return compare != 0 ? compare : left.Placement.y.CompareTo(right.Placement.y);
+            });
+            if (candidates.Count > maxCandidates) candidates.RemoveRange(maxCandidates, candidates.Count - maxCandidates);
+            return candidates;
         }
 
 
@@ -2474,12 +2377,19 @@ namespace DeepNestLib
             //console.log('nfp cached:', c);
             Stopwatch sw = Stopwatch.StartNew();
 
-            var placement = placeParts(data.sheets.ToArray(), parts, data.config, index);//只考虑摆放最短的
-            var placement1 = placeParts1(data.sheets.ToArray(), parts, data.config, index);//贪心+束搜索
-            if (placement1.fitness < placement.fitness)
-            {
-                placement = placement1;
-            }
+            //var placement = placeParts(data.sheets.ToArray(), parts, data.config, index);
+            //var placement1 = placeParts1(data.sheets.ToArray(), parts, data.config, index);
+            //var placement2 = data.config.EnablePlaceParts2
+            //    ? placeParts2(data.sheets.ToArray(), parts, data.config, index) : null;
+            //foreach (var candidate in new[] { placement1, placement2 })
+            //{
+            //    if (SheetPlacement.IsBetterThan(candidate, placement))
+            //    {
+            //        placement = candidate;
+            //    }
+            //}
+
+            var placement = placeParts2(data.sheets.ToArray(), parts, data.config, index);
 
             sw.Stop();
             LastPlacePartTime = sw.ElapsedMilliseconds;
@@ -3274,8 +3184,6 @@ namespace DeepNestLib
             }
             */
             return nfps;
-
-
 
         }
 

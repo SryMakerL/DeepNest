@@ -154,7 +154,7 @@ namespace DeepNestLib
             Nest.launchWorkers(partsLocal.ToArray());
             var plcpr = Nest.nests.First();
 
-            if (current == null || plcpr.fitness < current.fitness)
+            if (SheetPlacement.IsBetterThan(plcpr, current))
             {
                 AssignPlacement(plcpr);
                 OptimizationCount++;

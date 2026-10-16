@@ -819,7 +819,7 @@ namespace DeepNestLib
             ga.population[payload.index].fitness = payload.fitness;
 
             // render placement
-            if (this.nests.Count == 0 || this.nests[0].fitness > payload.fitness)
+            if (this.nests.Count == 0 || SheetPlacement.IsBetterThan(payload, this.nests[0]))
             {
                 this.nests.Insert(0, payload);
 
@@ -1150,6 +1150,50 @@ namespace DeepNestLib
         public double area;
         public double mergedLength;
         internal int index;
+
+        public static bool IsBetterThan(SheetPlacement candidate, SheetPlacement current)
+        {
+            if (candidate == null) return false;
+            if (current == null) return true;
+
+            GetCounts(candidate, out int candidateParts, out int candidateSheets);
+            GetCounts(current, out int currentParts, out int currentSheets);
+            if (candidateParts != currentParts) return candidateParts > currentParts;
+            if (candidateSheets != currentSheets) return candidateSheets < currentSheets;
+
+            bool candidateFinite = candidate.fitness.HasValue
+                && !double.IsNaN(candidate.fitness.Value) && !double.IsInfinity(candidate.fitness.Value);
+            bool currentFinite = current.fitness.HasValue
+                && !double.IsNaN(current.fitness.Value) && !double.IsInfinity(current.fitness.Value);
+            if (candidateFinite != currentFinite) return candidateFinite;
+            if (!candidateFinite) return false;
+
+            double candidateFitness = candidate.fitness.Value;
+            double currentFitness = current.fitness.Value;
+            double scale = Math.Max(Math.Abs(candidateFitness), Math.Abs(currentFitness));
+            return candidateFitness < currentFitness
+                && Math.Abs(candidateFitness - currentFitness) > 1e-7 * scale;
+        }
+
+        private static void GetCounts(SheetPlacement placement, out int parts, out int sheets)
+        {
+            var partIds = new HashSet<int>();
+            var sheetIds = new HashSet<int>();
+            if (placement.placements != null)
+            {
+                foreach (var group in placement.placements)
+                {
+                    foreach (var sheet in group)
+                    {
+                        if (sheet.sheetplacements.Count == 0) continue;
+                        sheetIds.Add(sheet.sheetId);
+                        foreach (var part in sheet.sheetplacements) partIds.Add(part.id);
+                    }
+                }
+            }
+            parts = partIds.Count;
+            sheets = sheetIds.Count;
+        }
     }
 
 

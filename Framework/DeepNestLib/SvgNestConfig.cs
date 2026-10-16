@@ -37,6 +37,14 @@
         /// </summary>
         public int LatticeMaxIterations { get; set; } = 150;
 
+        public bool EnablePlaceParts2 { get; set; } = true;
+        public int PlaceParts2Starts { get; set; } = 3;
+        public int PlaceParts2BeamWidth { get; set; } = 4;
+        public int PlaceParts2Lookahead { get; set; } = 3;
+        public int PlaceParts2Candidates { get; set; } = 3;
+        public int PlaceParts2Seed { get; set; } = 1;
+        public int PlaceParts2TimeLimitMs { get; set; } = 200;
+
         public int PlaceParts1BeamWidth { get; set; } = 20;
         public int PlaceParts1LookaheadParts { get; set; } = 6;
     }
