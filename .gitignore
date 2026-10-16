@@ -1,0 +1,11 @@
+*.user
+packages/
+bin/
+obj/
+.vs/
+*.zip
+*.obj
+*.dll
+*.bat
+*.exp
+*.lib
