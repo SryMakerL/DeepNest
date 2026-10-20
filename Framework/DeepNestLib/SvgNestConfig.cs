@@ -22,6 +22,9 @@
         public bool clipByRects = true; //clip by AABB + MinRect
         #endregion
 
+        public bool EnableOverlapRemoval { get; set; } = true;
+        public int OverlapRemovalTimeBudgetMilliseconds { get; set; } = 100;
+
         /// <summary>
         /// 启用晶格排样（周期性排列）
         /// </summary>
